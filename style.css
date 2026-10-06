@@ -313,3 +313,35 @@ input[type="text"]:focus, input[type="password"]:focus {
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.3);
 }
+
+/* Image Upload & Display Styles */
+.attach-btn {
+    width: 50px;
+    border-radius: 50%;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.message-image {
+    max-width: 100%;
+    border-radius: 12px;
+    margin-top: 8px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    cursor: pointer;
+    transition: transform 0.2s ease;
+}
+
+.message-image:hover {
+    transform: scale(1.02);
+}
+
+.message-bubble.self .message-image {
+    border: 2px solid var(--message-self);
+}
+
+.message-bubble.other .message-image {
+    border: 2px solid var(--message-other);
+}
+
