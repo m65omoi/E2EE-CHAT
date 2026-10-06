@@ -9,10 +9,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const leaveBtn = document.getElementById('leave-btn');
 
     // State
-    let socket = null;
+    let mqttClient = null;
     let cryptoKey = null;
     let username = '';
-    const ROOM_NAME = 'dorm-secret-room'; // Default single room
+    const ROOM_NAME = 'dorm-secret-room'; // Default room name, used to derive MQTT topic
+    let mqttTopic = '';
+
+    // Broker Configuration (Public EMQX Broker)
+    const MQTT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
 
     // Join Room
     joinForm.addEventListener('submit', async (e) => {
@@ -27,14 +31,43 @@ document.addEventListener('DOMContentLoaded', () => {
             // Derive the encryption key from the passphrase
             cryptoKey = await E2EE.deriveKey(passphrase);
             
-            // Connect to Socket.io server
-            socket = io();
+            // Hash the room name and passphrase to generate a unique but deterministic MQTT topic
+            // This prevents overlapping with random public users on the broker
+            const encoder = new TextEncoder();
+            const topicData = encoder.encode(ROOM_NAME + passphrase);
+            const topicHashBuffer = await crypto.subtle.digest('SHA-256', topicData);
+            const topicHashArray = Array.from(new Uint8Array(topicHashBuffer));
+            const topicHashHex = topicHashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            mqttTopic = `dormchat/e2ee/${topicHashHex}`;
+            
+            // Connect to MQTT broker via WebSockets
+            mqttClient = mqtt.connect(MQTT_BROKER, {
+                clientId: 'dorm_user_' + Math.random().toString(16).substr(2, 8)
+            });
 
-            socket.emit('join_room', ROOM_NAME);
+            mqttClient.on('connect', () => {
+                console.log('Connected to MQTT public broker');
+                mqttClient.subscribe(mqttTopic, (err) => {
+                    if (err) {
+                        console.error('Subscription error:', err);
+                        alert("连接房间失败！");
+                    }
+                });
+            });
 
             // Listen for incoming messages
-            socket.on('receive_message', async (data) => {
-                await handleIncomingMessage(data);
+            mqttClient.on('message', async (topic, message) => {
+                if (topic === mqttTopic) {
+                    try {
+                        const data = JSON.parse(message.toString());
+                        // Only process if it's not sent by ourselves (MQTT echoes back)
+                        if (data.senderName !== username) {
+                            await handleIncomingMessage(data);
+                        }
+                    } catch (err) {
+                        console.error('Failed to parse incoming message:', err);
+                    }
+                }
             });
 
             // Switch UI
@@ -44,7 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
             addSystemMessage(`你已作为 ${username} 加入加密频道。`);
             
         } catch (error) {
-            console.error("Key derivation failed", error);
+            console.error("Initialization failed", error);
             alert("初始化加密失败，请重试。");
         }
     });
@@ -60,17 +93,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const encryptedData = await E2EE.encrypt(text, cryptoKey);
             
             const payload = {
-                room: ROOM_NAME,
                 senderName: username,
                 ciphertext: encryptedData.ciphertext,
                 iv: encryptedData.iv,
                 timestamp: Date.now()
             };
 
-            // Send to server
-            socket.emit('send_message', payload);
+            // Publish via MQTT
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(mqttTopic, JSON.stringify(payload));
+            } else {
+                addSystemMessage("发送失败：未连接到网络。");
+                return;
+            }
 
-            // Render locally (don't need to decrypt our own message)
+            // Render locally
             addChatMessage(username, text, true);
             messageInput.value = '';
 
@@ -122,13 +159,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Leave Room
     leaveBtn.addEventListener('click', () => {
-        if (socket) {
-            socket.disconnect();
-            socket = null;
+        if (mqttClient) {
+            mqttClient.end();
+            mqttClient = null;
         }
         cryptoKey = null;
         username = '';
         document.getElementById('passphrase').value = '';
+        mqttTopic = '';
         
         messagesArea.innerHTML = '<div class="system-message">欢迎来到加密聊天室，输入的消息只有知道密钥的人才能看到。</div>';
         
